@@ -1,112 +1,253 @@
-import Image from "next/image";
+"use client";
+import BarTextValue from "@/components/bar-text-value";
+import * as d3 from "d3";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import { data } from "../lib/valuation-data";
+
+const N_RANKED_BRANDS = 15;
+const N_KEYFRAMES_PER_POINT = 10;
+
+const height = 400;
+const width = 800;
+const marginTop = 16;
+const marginLeft = 16;
+const marginRight = 6;
+const barSize = 48;
+
+const duration = 250;
+
+interface Datum {
+  date: string;
+  name: string;
+  category: string;
+  value: number;
+}
 
 export default function Home() {
+  const dataToJson = useMemo(
+    () =>
+      (JSON.parse(data) as Datum[]).map((d) => ({
+        ...d,
+        date: new Date(d.date),
+      })),
+    []
+  );
+
+  //Sort all data by the date
+  const dateValues = useMemo(
+    () =>
+      Array.from(
+        d3.rollup(
+          dataToJson,
+          ([d]) => d.value,
+          (d) => d.date,
+          (d) => d.name
+        )
+      )
+        .map(([date, data]) => [new Date(date), data] as const)
+        .sort(([a], [b]) => d3.ascending(a, b)),
+    [dataToJson]
+  );
+
+  const companyNames = useMemo(
+    () => new Set(dataToJson.map((d) => d.name)),
+    [dataToJson]
+  );
+
+  const rank = useCallback(
+    (value: (name: string) => number) => {
+      const data = Array.from(companyNames, (name) => ({
+        name,
+        value: value(name),
+      }))
+        .sort((a, b) => d3.descending(a.value, b.value))
+        .map((d, i) => ({
+          ...d,
+          rank: Math.min(N_RANKED_BRANDS, i),
+        }));
+
+      return data;
+    },
+    [companyNames]
+  );
+
+  const keyframes = useMemo(() => {
+    const keyframes: [Date, ReturnType<typeof rank>][] = [];
+
+    d3.pairs(dateValues).forEach(([[ka, a], [kb, b]], index, arr) => {
+      for (let i = 0; i < N_KEYFRAMES_PER_POINT; ++i) {
+        const t = i / N_KEYFRAMES_PER_POINT;
+        keyframes.push([
+          new Date(+ka * (1 - t) + +kb * t),
+          rank((name) => (a.get(name) || 0) * (1 - t) + (b.get(name) || 0) * t),
+        ]);
+      }
+
+      if (index === arr.length - 1) {
+        keyframes.push([new Date(kb), rank((name) => b.get(name) || 0)]);
+      }
+    });
+
+    return keyframes;
+  }, [dateValues, rank]);
+
+  const y = useMemo(() => {
+    return d3
+      .scaleBand<number>()
+      .domain(d3.range(N_RANKED_BRANDS + 1))
+      .rangeRound([
+        marginTop,
+        marginTop + barSize * (N_RANKED_BRANDS + 1 + 0.1),
+      ])
+      .padding(0.1);
+  }, []);
+
+  const [keyFrameIndex, setKeyFrameIndex] = useState(0);
+
+  const currentKeyFrame = useMemo(() => {
+    return keyframes[keyFrameIndex];
+  }, [keyFrameIndex, keyframes]);
+
+  const x = useMemo(() => {
+    return d3
+      .scaleLinear()
+      .range([marginLeft, width - marginRight])
+      .domain([0, currentKeyFrame[1][0].value]);
+  }, [currentKeyFrame]);
+
+  const [canReplay, setCanReplay] = useState(false);
+
+  const interval = useRef<ReturnType<typeof setInterval>>();
+
+  const resetIndex = useCallback(() => {
+    setKeyFrameIndex((prev) => {
+      if (prev >= keyframes.length - 1) {
+        clearInterval(interval?.current);
+        return prev;
+      }
+      return prev + 1;
+    });
+  }, [keyframes.length]);
+
+  useEffect(() => {
+    if (!canReplay) return;
+    interval.current = setInterval(() => {
+      resetIndex();
+    }, duration);
+
+    return () => {
+      clearInterval(interval?.current);
+    };
+  }, [keyframes.length, canReplay, resetIndex]);
+
+  const [keyframeDate, keyframeData] = currentKeyFrame;
+
+  const axisRef = useRef<SVGGElement>(null);
+
+  useEffect(() => {
+    if (!axisRef?.current) return;
+    const axis = d3
+      .axisTop(x)
+      .ticks(width / 160, undefined)
+      .tickSizeOuter(0)
+      .tickSizeInner(-barSize * (N_RANKED_BRANDS + y.padding()));
+
+    const axisEl = d3.select(axisRef?.current);
+    axisEl.call(axis);
+    axisEl.select(".tick:first-of-type text").remove();
+    axisEl.selectAll(".tick:not(:first-of-type) line").attr("stroke", "white");
+    axisEl.select(".domain").remove();
+  }, [x, y]);
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/app/page.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <main>
+      <div className="py-3 px-3">
+        <h4 className="text-center text-2xl font-bold">
+          A racing bar chart of the valuations of top brands from 2000 to 2019
+          in millions of dollars
+        </h4>
+      </div>
+      <div className="flex flex-col lg:flex-row flex-wrap">
+        <div className="px-3 mt-7 w-[300px] md:w-[500px] lg:w-[700px] xl:w-[1000px]">
+          <svg
+            viewBox={`0 0 ${width} ${height}`}
+            className={`max-w-full h-auto transition-all duration-[${duration}ms] ease-linear`}
           >
-            By{" "}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
+            <g>
+              {keyframeData
+                .slice(0, N_RANKED_BRANDS)
+                .map(({ rank, name, value }) => {
+                  return (
+                    <rect
+                      key={name}
+                      height={y.bandwidth()}
+                      x={x(0)}
+                      y={y(rank)}
+                      width={x(value) - x(0)}
+                      className={`transition-all duration-[${duration}ms] ease-linear fill-blue-300`}
+                    ></rect>
+                  );
+                })}
+            </g>
+            <g
+              ref={axisRef}
+              style={{ transform: `translate(0,${marginTop}px)` }}
+              className={`transition-all duration-[${duration}ms] ease-linear`}
+            ></g>
+            <g
+              className="font-sans font-bold text-xs tabular-nums"
+              style={{ textAnchor: "end" }}
+            >
+              {keyframeData
+                .slice(0, N_RANKED_BRANDS)
+                .map((data, index, array) => {
+                  return (
+                    <BarTextValue
+                      key={data?.name}
+                      duration={duration}
+                      data={data}
+                      index={index}
+                      array={array}
+                      x={x}
+                      y={y}
+                    />
+                  );
+                })}
+            </g>
+            <text
+              className={`font-bold text-[32px] font-sans tabular-nums`}
+              style={{ textAnchor: "end" }}
+              x={width - 6}
+              dy={"0.32em"}
+              y={height - 20}
+            >
+              {d3.utcFormat("%Y")(keyframeDate)}
+            </text>
+          </svg>
         </div>
-      </div>
 
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-full sm:before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-full sm:after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 before:lg:h-[360px] z-[-1]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Explore starter templates for Next.js.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50 text-balance`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
+        <div className="ml-7 px-3 py-7">
+          <button
+            className="bg-blue-600 text-white px-3.5 py-1.5 rounded-md"
+            onClick={() => {
+              console.log("click");
+              setCanReplay(true);
+              clearInterval(interval.current);
+              interval.current = setInterval(() => {
+                resetIndex();
+              }, duration);
+              setKeyFrameIndex(0);
+            }}
+          >
+            Start Replay
+          </button>
+        </div>
       </div>
     </main>
   );
